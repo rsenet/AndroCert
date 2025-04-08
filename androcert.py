@@ -45,10 +45,9 @@ def analyze_apk(apk_path):
         "v1 signature": apk.is_signed_v1(),
         "v2 signature": apk.is_signed_v2(),
         "v3 signature": apk.is_signed_v3(),
-        "v4 signature": False,
+        "v4 signature": False, # Not supported by pyaxmlparser yet
         "Algorithme de signature (inféré)": infer_signature_algo(cert),
         "X.509 Subject": cert.subject.rfc4514_string(),
-        "Signature Algorithm": "rsassa_pkcs1v15",
         "Valid From": cert.not_valid_before_utc.isoformat(),
         "Valid To": cert.not_valid_after_utc.isoformat(),
         "Issuer": cert.issuer.rfc4514_string(),
@@ -60,7 +59,6 @@ def analyze_apk(apk_path):
         "PublicKey Algorithm": type(pubkey).__name__.replace("PublicKey", "").lower(),
         "Bit Size": key_size,
         "Clé publique (DER, hex, début)": pubkey_bytes.hex()[:64] + "...",
-        "Found certificates": 1,
     }
 
     return info
