@@ -1,11 +1,13 @@
 import sys
-import json
+import os
+import csv
 import argparse
 from pyaxmlparser import APK
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, dsa, ec
+
 
 def infer_signature_algo(cert):
     public_key = cert.public_key()
@@ -23,9 +25,13 @@ def infer_signature_algo(cert):
         return f"{hash_algo}withECDSA"
     return f"{hash_algo}withUnknownAlgo"
 
+
 def analyze_apk(apk_path):
     apk = APK(apk_path)
-    der_cert = apk.get_certificates_der_v2()[0]
+    certs_v2 = apk.get_certificates_der_v2()
+    if not certs_v2:
+        raise ValueError("Aucun certificat v2 trouvé (liste vide)")
+    der_cert = certs_v2[0]
     cert = x509.load_der_x509_certificate(der_cert, backend=default_backend())
     pubkey = cert.public_key()
 
@@ -39,13 +45,13 @@ def analyze_apk(apk_path):
     except AttributeError:
         key_size = "Unknown"
 
-    info = {
+    return {
         "APK": apk_path,
         "Binary is signed": apk.is_signed(),
         "v1 signature": apk.is_signed_v1(),
         "v2 signature": apk.is_signed_v2(),
         "v3 signature": apk.is_signed_v3(),
-        "v4 signature": False, # Not supported by pyaxmlparser yet
+        "v4 signature": False,
         "Algorithme de signature (inféré)": infer_signature_algo(cert),
         "X.509 Subject": cert.subject.rfc4514_string(),
         "Valid From": cert.not_valid_before_utc.isoformat(),
@@ -61,24 +67,81 @@ def analyze_apk(apk_path):
         "Clé publique (DER, hex, début)": pubkey_bytes.hex()[:64] + "...",
     }
 
-    return info
 
 def main():
     parser = argparse.ArgumentParser(description="APK certificate inspection tool")
-    parser.add_argument("apk", help="APK file to inspect")
-    parser.add_argument("--json", action="store_true", help="Output in JSON format")
+    parser.add_argument("apk", help="APK file or directory to inspect")
+    parser.add_argument("--csv", action="store_true", help="Écrire les résultats dans un fichier CSV")
     args = parser.parse_args()
 
-    info = analyze_apk(args.apk)
-
-    if args.json:
-        print(json.dumps(info, indent=4))
+    # Collecte des fichiers APK
+    if os.path.isdir(args.apk):
+        apk_files = []
+        for root, _, files in os.walk(args.apk):
+            for fname in files:
+                if fname.lower().endswith('.apk'):
+                    apk_files.append(os.path.join(root, fname))
+        if not apk_files:
+            print(f"Aucun fichier .apk trouvé dans le répertoire : {args.apk}")
+            sys.exit(1)
     else:
-        for key, value in info.items():
-            print(f"{key}: {value}")
+        apk_files = [args.apk]
+
+    results = []
+    for apk_path in apk_files:
+        try:
+            info = analyze_apk(apk_path)
+        except Exception as e:
+            # Contexte additionnel pour les échecs
+            try:
+                apk = APK(apk_path)
+                context_info = {
+                    "APK": apk_path,
+                    "Binary is signed": apk.is_signed(),
+                    "v1 signature": apk.is_signed_v1(),
+                    "v2 signature": apk.is_signed_v2(),
+                    "v3 signature": apk.is_signed_v3(),
+                    "v4 signature": False, # Not supported by pyaxmlparser yet
+                    "Error": str(e)
+                }
+            except Exception as e2:
+                context_info = {
+                    "APK": apk_path,
+                    "Error": f"{e} (échec extraction signature: {e2})"
+                }
+            results.append(context_info)
+            print(f"Erreur lors de l'analyse de {apk_path}: {e}")
+        else:
+            results.append(info)
+
+    # Sortie CSV ou console
+    if args.csv:
+        if results:
+            # Union des champs pour inclure "Error"
+            fieldnames = set()
+            for row in results:
+                fieldnames.update(row.keys())
+            fieldnames = list(fieldnames)
+
+            base = os.path.basename(os.path.normpath(args.apk))
+            output_file = f"{base}.csv"
+            with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                for row in results:
+                    writer.writerow(row)
+            print(f"Résultats CSV écrits dans : {output_file}")
+        else:
+            print("Aucun résultat à écrire.")
+    else:
+        for info in results:
+            print("----------------------------------------")
+            for key, value in info.items():
+                print(f"{key}: {value}")
+        print("----------------------------------------")
 
 if __name__ == "__main__":
     if len(sys.argv) == 1:
-        print("Usage: python3 androcert.py <fichier.apk> [--json]")
+        print("Usage: python3 androcert.py <fichier.apk|répertoire> [--csv]")
         sys.exit(1)
     main()
